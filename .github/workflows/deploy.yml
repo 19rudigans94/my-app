@@ -1,0 +1,100 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  DOCKER_IMAGE: my-next-app
+  CONTAINER_NAME: next-app-container
+  NGINX_CONTAINER: nginx-proxy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for Dockerfile
+        id: check_dockerfile
+        run: |
+          if [ ! -f Dockerfile ]; then
+            echo "::error::Dockerfile не найден в корне репозитория. Пожалуйста, создайте Dockerfile для сборки приложения."
+            exit 1
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+        continue-on-error: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Создаем сеть Docker если она не существует
+            docker network create app-network || true
+            
+            # Остановка и удаление старых контейнеров
+            docker stop ${{ env.CONTAINER_NAME }} || true
+            docker rm ${{ env.CONTAINER_NAME }} || true
+            docker stop ${{ env.NGINX_CONTAINER }} || true
+            docker rm ${{ env.NGINX_CONTAINER }} || true
+            
+            # Получение последней версии образа
+            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
+            
+            # Запуск Next.js контейнера
+            docker run -d \
+              --name ${{ env.CONTAINER_NAME }} \
+              --network app-network \
+              --restart unless-stopped \
+              ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.DOCKER_IMAGE }}:latest
+            
+            # Копирование конфигурации Nginx на сервер
+            echo "${{ secrets.NGINX_CONF }}" > /tmp/nginx.conf
+            
+            # Запуск Nginx контейнера
+            docker run -d \
+              --name ${{ env.NGINX_CONTAINER }} \
+              --network app-network \
+              -p 80:80 \
+              -v /tmp/nginx.conf:/etc/nginx/nginx.conf:ro \
+              --restart unless-stopped \
+              nginx:alpine
+            
+            # Проверка статуса контейнеров
+            docker ps | grep -E "${{ env.CONTAINER_NAME }}|${{ env.NGINX_CONTAINER }}"
+            
+            # Очистка неиспользуемых образов
+            docker image prune -f
