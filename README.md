@@ -1,9 +1,5 @@
 # Что я тестирую в этом проекте
 
-* [Next.js](https://nextjs.org/) - фреймворк для React
-* [Tailwind CSS](https://tailwindcss.com/) - фреймворк для CSS
-* [ESLint](https://eslint.org/) - линтер для JavaScript
-* [Docker](https://www.docker.com/) - контейнеризация
 * GitHub Actions:
 	+ [Checkout](https://github.com/actions/checkout) - получение кода репозитория в workflow
 	+ [Setup Node](https://github.com/actions/setup-node) - настройка среды Node.js для workflow
